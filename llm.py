@@ -25,9 +25,10 @@ def extract_notes(text):
     END CHAPTER TEXT
 
     The summary must contain the following structure:
-    - Title (extracted or inferred from text)
+    - Title (extracted or inferred from text, always a # header)
     - Summary: A short summary of the content
     - Notes
+      - Lessons (stuff that the chapter teaches, explains, or exposes)
       - Key points
       - Interesting quotes
     - Annecdotes or interesting comparisons
@@ -39,3 +40,16 @@ def extract_notes(text):
     response = remove_thinking(response)
 
     return response.strip()
+
+def translate_text(text, target_lang):
+  prompt = f"""
+  Your task is to translate the following markdown text from its origional language to {target_lang}.
+  You must keep the headings (#, ##, etc), lists and other markdown items just as they are.
+
+  {text}
+  """
+
+  response = llm.invoke(prompt)
+  response = remove_thinking(response)
+
+  return response.strip()
