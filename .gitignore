@@ -1,0 +1,10 @@
+.venv
+output
+*epub
+*pdf
+__pycache__
+*.pyc
+
+.vscode
+.idea
+book.md
