@@ -8,7 +8,7 @@ LLMS = {
     'deepseek-r1': 'deepseek-r1:32b',
 }
 
-llm = OllamaLLM(model=LLMS['deepseek-r1'], temperature=0.3, top_k=10, top_p=0.5)
+llm = OllamaLLM(model=LLMS['qwen'], temperature=0.3, top_k=10, top_p=0.5)
 
 def remove_thinking(text):
   """
