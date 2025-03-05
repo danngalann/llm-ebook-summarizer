@@ -10,6 +10,7 @@ dependencies = [
     "async-timeout==4.0.3",
     "attrs==24.3.0",
     "beautifulsoup4==4.12.3",
+    "bs4>=0.0.2",
     "certifi==2024.12.14",
     "charset-normalizer==3.4.1",
     "ebooklib==0.18",
