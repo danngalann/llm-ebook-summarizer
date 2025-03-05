@@ -1,4 +1,5 @@
 import os
+import argparse
 from ebooklib import epub, ITEM_DOCUMENT
 from bs4 import BeautifulSoup
 from typing import Optional
@@ -64,10 +65,16 @@ def extract_chapters(epub_path: str) -> None:
         chapter_text: str = soup.get_text(separator='\n', strip=True)
         process_text(item.get_name(), chapter_text)
 
-if __name__ == "__main__":
+def main():
+    parser = argparse.ArgumentParser(description="Process an EPUB book and extract chapter notes.")
+    parser.add_argument("epub_file", help="Path to the EPUB file to be processed")
+    args = parser.parse_args()
+
     ensure_output_dir_exists()
     
-    epub_file_path: str = "book.epub"
-    extract_chapters(epub_file_path)
+    extract_chapters(args.epub_file)
 
     print("Processing complete. All chapters have been processed and saved.")
+
+if __name__ == "__main__":
+    main()
