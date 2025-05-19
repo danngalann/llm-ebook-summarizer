@@ -3,12 +3,13 @@ import re
 
 LLMS = {
     'qwen': 'qwen2.5:32b',
+    'qwen3-a3b': 'qwen3:30b-a3b',
     'llama3.2': 'llama3.2:latest',
     'llama3.1': 'llama3.1:8b',
     'deepseek-r1': 'deepseek-r1:32b',
 }
 
-llm = OllamaLLM(model=LLMS['qwen'], temperature=0.3, top_k=10, top_p=0.5)
+llm = OllamaLLM(model=LLMS['qwen3-a3b'], temperature=0.3, top_k=10, top_p=0.5)
 
 def remove_thinking(text):
   """
@@ -34,6 +35,7 @@ def extract_notes(text):
     - Annecdotes or interesting comparisons
 
     Your response is pure markdown, without additional explanations sorrounding the notes and summary.
+    /no_think
     """
 
     response = llm.invoke(prompt)
@@ -45,6 +47,8 @@ def translate_text(text, target_lang):
   prompt = f"""
   Your task is to translate the following markdown text from its origional language to {target_lang}.
   You must keep the headings (#, ##, etc), lists and other markdown items just as they are.
+
+  /no_think
 
   {text}
   """
