@@ -1,32 +1,51 @@
 import os
 import argparse
-from llm import translate_text
+from llm import translate_text_batch
 from tqdm import tqdm
 
 INPUT_DIR = "output"
 TRANSLATIONS_DIR = "translations"
 
-def process_text(chapter_filename: str, target_lang: str) -> None:
-    # Read the content of the Markdown file
-    with open(chapter_filename, "r", encoding="utf-8") as file:
-        text = file.read()
+def translate_all_files(target_lang: str) -> None:
+    """
+    Translates all markdown files in batch using vLLM.
     
-    # Translate the text using the provided function
-    translated_text = translate_text(text, target_lang)
+    Args:
+        target_lang (str): Target language for translation.
+    """
+    # Gather all .md files in the input directory
+    md_files = [os.path.join(INPUT_DIR, f) for f in os.listdir(INPUT_DIR) if f.endswith(".md")]
+    
+    if not md_files:
+        print("No markdown files found to translate.")
+        return
     
     # Create the translations output directory if it doesn't exist
     os.makedirs(TRANSLATIONS_DIR, exist_ok=True)
     
-    # Prepare a new filename for the translated file in the translations directory
-    base_name = os.path.basename(chapter_filename)
-    name, ext = os.path.splitext(base_name)
-    output_filename = os.path.join(TRANSLATIONS_DIR, f"{name}_{target_lang}{ext}")
+    print(f"Loading {len(md_files)} files...")
     
-    # Write the translated text to the new file
-    with open(output_filename, "w", encoding="utf-8") as file:
-        file.write(translated_text)
+    # Read all files
+    texts = []
+    for md_file in md_files:
+        with open(md_file, "r", encoding="utf-8") as file:
+            texts.append(file.read())
     
-    print(f"Translated {chapter_filename} -> {output_filename}")
+    print(f"Translating {len(texts)} files in batch...")
+    
+    # Translate all files in one batch
+    translated_texts = translate_text_batch(texts, target_lang)
+    
+    # Save results with progress bar
+    for md_file, translated_text in tqdm(zip(md_files, translated_texts), total=len(md_files), desc="Saving translations"):
+        base_name = os.path.basename(md_file)
+        name, ext = os.path.splitext(base_name)
+        output_filename = os.path.join(TRANSLATIONS_DIR, f"{name}_{target_lang}{ext}")
+        
+        with open(output_filename, "w", encoding="utf-8") as file:
+            file.write(translated_text)
+        
+        print(f"Translated {md_file} -> {output_filename}")
 
 if __name__ == "__main__":
     # Set up argument parsing for target language
@@ -34,9 +53,6 @@ if __name__ == "__main__":
     parser.add_argument("target_lang", type=str, help="Target language for translation (e.g., 'es' for Spanish)")
     args = parser.parse_args()
     
-    # Gather all .md files in the input directory
-    md_files = [os.path.join(INPUT_DIR, f) for f in os.listdir(INPUT_DIR) if f.endswith(".md")]
+    translate_all_files(args.target_lang)
     
-    # Process each file with a progress bar
-    for md_file in tqdm(md_files, desc="Translating files"):
-        process_text(md_file, args.target_lang)
+    print("Translation complete. All files have been translated.")
