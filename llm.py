@@ -1,6 +1,8 @@
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
+from constants import AI_BATCH_SIZE, ENABLE_CUDA_GRAPH
+
 # Model configuration
 MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
 
@@ -28,7 +30,7 @@ llm = LLM(
     dtype="bfloat16",
     trust_remote_code=True,
     hf_overrides=hf_overrides,
-    enforce_eager=True,  # Disable CUDA graph capture to reduce VRAM usage
+    enforce_eager=not ENABLE_CUDA_GRAPH,
     max_num_seqs=32,  # Reduce from default 256 to lower memory usage during batching
 #    gpu_memory_utilization=0.85,  # Reduce from default 0.9 to leave more headroom
 )
@@ -88,12 +90,11 @@ def extract_notes(text):
     response = outputs[0].outputs[0].text
     return response.strip()
 
-def extract_notes_batch(texts, batch_size=5):
+def extract_notes_batch(texts):
     """Extract notes from multiple chapters in batches to manage memory.
     
     Args:
         texts (list[str]): List of chapter texts
-        batch_size (int): Number of chapters to process in each batch
         
     Returns:
         list[str]: List of extracted notes for each chapter
@@ -101,8 +102,8 @@ def extract_notes_batch(texts, batch_size=5):
     all_results = []
     
     # Process in chunks to avoid OOM
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i:i+batch_size]
+    for i in range(0, len(texts), AI_BATCH_SIZE):
+        batch_texts = texts[i:i+AI_BATCH_SIZE]
         prompts = []
         
         for text in batch_texts:
@@ -146,13 +147,12 @@ def translate_text(text, target_lang):
     response = outputs[0].outputs[0].text
     return response.strip()
 
-def translate_text_batch(texts, target_lang, batch_size=5):
+def translate_text_batch(texts, target_lang):
     """Translate multiple texts in batches to manage memory.
     
     Args:
         texts (list[str]): List of texts to translate
         target_lang (str): Target language
-        batch_size (int): Number of texts to process in each batch
         
     Returns:
         list[str]: List of translated texts
@@ -160,8 +160,8 @@ def translate_text_batch(texts, target_lang, batch_size=5):
     all_results = []
     
     # Process in chunks to avoid OOM
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i:i+batch_size]
+    for i in range(0, len(texts), AI_BATCH_SIZE):
+        batch_texts = texts[i:i+AI_BATCH_SIZE]
         prompts = []
         
         for text in batch_texts:
