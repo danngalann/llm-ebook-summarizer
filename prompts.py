@@ -62,6 +62,7 @@ Rules:
 - Use a bulleted list.
 - Pure Markdown only.
 - Do NOT use headings.
+- Return no more than the top 5 most important lessons.
 """
 
 EXTRACT_KEYPOINTS_PROMPT = """
@@ -81,6 +82,7 @@ Rules:
 - Present key points as a bulleted list with concise explanations.
 - Pure Markdown only.
 - Do NOT use headings.
+- Return no more than the top 10 key points.
 """
 
 
