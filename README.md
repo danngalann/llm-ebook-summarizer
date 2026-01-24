@@ -11,9 +11,10 @@ A tool for extracting and summarizing chapters from ebooks using LLMs. Perfect f
 - **Context preservation** — Includes parent section introductions when summarizing nested content
 
 ### AI-Powered Processing
+- Uses **Ollama** with large quantized models (32B) for high-quality summaries
 - Generates structured markdown notes for each chapter
 - Extracts key insights: summaries, lessons, quotes, and anecdotes
-- Batch processing for efficient summarization
+- Sequential processing optimized for single-GPU inference
 - Maintains 200-word minimum filter for quality content
 
 ### Translation
@@ -25,6 +26,41 @@ A tool for extracting and summarizing chapters from ebooks using LLMs. Perfect f
 - Individual markdown files per section
 - Sequential numbering with descriptive filenames
 - Merge utility to combine into single file
+
+## Prerequisites
+
+### Ollama Setup
+
+This project uses **Ollama** for LLM inference. Ollama must be installed and running before using the summarizer.
+
+1. **Install Ollama:**
+   ```bash
+   # Linux
+   curl -fsSL https://ollama.com/install.sh | sh
+   
+   # macOS
+   brew install ollama
+   
+   # Or download from: https://ollama.com/download
+   ```
+
+2. **Pull the model:**
+   ```bash
+   ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M
+   ```
+
+3. **Start Ollama server** (if not already running):
+   ```bash
+   ollama serve
+   ```
+   
+   The server runs on `http://localhost:11434` by default.
+
+**Why Ollama?**
+
+This project prioritizes **summary quality over throughput**. Ollama's conservative memory allocation allows 32B-class quantized models to run on a 24 GB GPU, providing significantly better output quality than the smaller models (7B-8B) that vLLM's aggressive KV-cache preallocation would require on the same hardware.
+
+For offline batch summarization with low concurrency, Ollama provides better quality with comparable runtime and lower operational complexity.
 
 ## Usage
 
@@ -140,6 +176,20 @@ Install dependencies:
 ```bash
 uv sync
 ```
+
+## Configuration
+
+You can customize the Ollama configuration in [constants.py](constants.py):
+
+```python
+OLLAMA_MODEL = "qwen3:30b-a3b-instruct-2507-q4_K_M"  # Model to use
+OLLAMA_BASE_URL = "http://localhost:11434"  # Ollama server URL
+```
+
+**Changing the model:**
+1. Pull a different model: `ollama pull <model-name>`
+2. Update `OLLAMA_MODEL` in [constants.py](constants.py)
+3. Run the summarizer
 
 ## Notes
 

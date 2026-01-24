@@ -30,7 +30,7 @@ def save_single_chapter(chapter_filename: str, notes: str, output_dir: str = OUT
 
 def extract_chapters(file_path: str) -> None:
     """
-    Extracts chapters from the given EPUB or PDF file and processes them in batches using vLLM.
+    Extracts chapters from the given EPUB or PDF file and processes them using Ollama.
     For PDFs with nested TOC, processes leaf nodes and merges summaries hierarchically.
 
     Args:
@@ -85,10 +85,7 @@ def extract_chapters(file_path: str) -> None:
             relevant_indices.append(i)
     
     # Filter chapter_data to only relevant chapters
-    if file_ext == '.pdf':
-        relevant_chapter_data = [chapter_data[i] for i in relevant_indices]
-    else:
-        relevant_chapter_data = [chapter_data[i] for i in relevant_indices]
+    relevant_chapter_data = [chapter_data[i] for i in relevant_indices]
     
     # Process only relevant sections
     summaries = extract_notes_batch(relevant_texts)

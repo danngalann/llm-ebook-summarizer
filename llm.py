@@ -1,7 +1,25 @@
-from vllm import LLM, SamplingParams
-from transformers import AutoTokenizer
+"""
+LLM client for book summarization using Ollama.
 
-from constants import AI_BATCH_SIZE, ENABLE_CUDA_GRAPH, GPU_MEMORY_UTILIZATION
+WHY OLLAMA INSTEAD OF vLLM:
+This project performs offline, batch summarization with low concurrency (1-2 active sequences).
+vLLM aggressively preallocates KV cache for high-throughput batching, which limits usable model size
+on a 24 GB GPU to ~7B-8B quantized models even with 4-bit quantization.
+
+Ollama uses conservative memory allocation optimized for single-sequence inference, allowing
+32B-class quantized models (e.g., qwen3:30b-a3b-instruct-2507-q4_K_M) to run on the same hardware. For this workload,
+Ollama provides significantly better output quality with comparable end-to-end runtime and
+much lower operational complexity.
+
+This design choice prioritizes summary quality over batching throughput, which is appropriate
+for offline batch processing on single-GPU hardware.
+"""
+
+import ollama
+from typing import List
+from tqdm import tqdm
+
+from constants import OLLAMA_MODEL, OLLAMA_BASE_URL
 from prompts import (
     CLASSIFY_CHAPTER_PROMPT,
     EXTRACT_SUMMARY_PROMPT,
@@ -13,101 +31,70 @@ from prompts import (
     TRANSLATE_TEXT_PROMPT
 )
 
-# Model configuration
-MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
+# Initialize Ollama client
+client = ollama.Client(host=OLLAMA_BASE_URL)
 
-# Initialize tokenizer
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-
-# Initialize LLM with 4-bit quantization
-rope_theta = 1000000
-original_max_position_embeddings = 32768
-# Reduced factor to fit in available VRAM (estimated max: 57376)
-factor = 1.75  # This gives us ~57344 tokens (32768 * 1.75)
-
-hf_overrides = {
-    "rope_parameters": {
-        "rope_theta": rope_theta,
-        "rope_type": "yarn",
-        "factor": factor,
-        "original_max_position_embeddings": original_max_position_embeddings,
-    },
-    "max_model_len": 57376,  # Use estimated maximum based on available KV cache
+# Generation parameters
+GENERATION_OPTIONS = {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "num_predict": 8192,  # Max tokens to generate (output length) - increased for longer summaries/translations
+    "num_ctx": 32768,  # Context window size (input + output) - Qwen3 supports up to 262k, but 32k is sufficient here
 }
 
-llm = LLM(
-    model=MODEL_ID,
-    dtype="bfloat16",
-    trust_remote_code=True,
-    hf_overrides=hf_overrides,
-    enforce_eager=not ENABLE_CUDA_GRAPH,
-    gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
-)
 
-# Sampling parameters for non-thinking mode (as per Qwen3 documentation)
-sampling_params = SamplingParams(
-    temperature=0.7,
-    top_p=0.8,
-    top_k=20,
-    min_p=0.0,
-    max_tokens=4096,  # Increase max tokens to prevent truncation
-)
-
-def apply_chat_template(prompt: str) -> str:
+def _generate(prompt: str) -> str:
     """
-    Apply the chat template to the prompt with thinking mode disabled.
+    Generate a response from the Ollama model.
     
     Args:
-        prompt (str): The user prompt
+        prompt: The user prompt
         
     Returns:
-        str: The formatted text with chat template applied
+        The generated text response
+        
+    Raises:
+        Exception: If Ollama connection or generation fails
     """
-    messages = [{"role": "user", "content": prompt}]
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False  # Disable thinking mode
-    )
-    return text
+    try:
+        response = client.chat(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            options=GENERATION_OPTIONS,
+        )
+        return response["message"]["content"].strip()
+    except Exception as e:
+        raise Exception(f"Ollama generation failed: {e}")
 
-def classify_chapters_batch(texts):
-    """Classify chapters to determine if they are relevant for processing.
+def classify_chapters_batch(texts: List[str]) -> List[str]:
+    """
+    Classify chapters to determine if they are relevant for processing.
     
-    This function runs the classification node on all chapters in batches.
+    Processes chapters sequentially (Ollama is optimized for single-sequence inference).
     Chapters are considered relevant if the LLM output includes 'RELEVANT' (case-insensitive).
     
     Args:
-        texts (list[str]): List of chapter texts
+        texts: List of chapter texts
         
     Returns:
-        list[str]: List of chapter texts that are classified as relevant
+        List of chapter texts that are classified as relevant
     """
     relevant_texts = []
     
-    # Process in chunks to avoid OOM
-    for i in range(0, len(texts), AI_BATCH_SIZE):
-        batch_texts = texts[i:i+AI_BATCH_SIZE]
+    for text in tqdm(texts, desc="Classifying chapters", unit="chapter"):
+        prompt = CLASSIFY_CHAPTER_PROMPT.format(text=text)
+        classification = _generate(prompt)
         
-        # Classify all chapters in the batch
-        classify_prompts = []
-        for text in batch_texts:
-            prompt = CLASSIFY_CHAPTER_PROMPT.format(text=text)
-            classify_prompts.append(apply_chat_template(prompt))
-        
-        classifications = llm.generate(classify_prompts, sampling_params)
-        classifications = [output.outputs[0].text.strip() for output in classifications]
-        
-        # Filter texts based on classification (case-insensitive, exact match)
-        for j, classification in enumerate(classifications):
-            if "relevant" == classification.lower():
-                relevant_texts.append(batch_texts[j])
+        # Filter texts based on classification (case-insensitive)
+        if "relevant" == classification.lower():
+            relevant_texts.append(text)
     
     return relevant_texts
 
-def extract_notes_batch(texts):
-    """Extract notes from multiple chapters using multi-node processing.
+def extract_notes_batch(texts: List[str]) -> List[str]:
+    """
+    Extract notes from multiple chapters using multi-node processing.
     
     This function processes each chapter through multiple task-specific nodes:
     1. Summary - generates main chapter title and summary
@@ -120,96 +107,74 @@ def extract_notes_batch(texts):
     The results are then aggregated into a structured markdown format.
     
     Args:
-        texts (list[str]): List of chapter texts
+        texts: List of chapter texts
         
     Returns:
-        list[str]: List of aggregated summaries for each chapter
+        List of aggregated summaries for each chapter
     """
     all_results = []
     
-    # Process in chunks to avoid OOM
-    for i in range(0, len(texts), AI_BATCH_SIZE):
-        batch_texts = texts[i:i+AI_BATCH_SIZE]
-        
-        # Process each node sequentially to manage GPU memory
-        # But process all chapters in the batch at once for each node
-        
+    # Process each chapter sequentially through all nodes
+    for text in tqdm(texts, desc="Processing chapters", unit="chapter"):
         # Node 1: Extract summary (includes title)
-        summary_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_SUMMARY_PROMPT.format(text=text)
-            summary_prompts.append(apply_chat_template(prompt))
-        summaries = llm.generate(summary_prompts, sampling_params)
-        summaries = [output.outputs[0].text.strip() for output in summaries]
+        prompt = EXTRACT_SUMMARY_PROMPT.format(text=text)
+        summary = _generate(prompt)
         
         # Node 2: Extract lessons
-        lessons_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_LESSONS_PROMPT.format(text=text)
-            lessons_prompts.append(apply_chat_template(prompt))
-        lessons = llm.generate(lessons_prompts, sampling_params)
-        lessons = [output.outputs[0].text.strip() for output in lessons]
+        prompt = EXTRACT_LESSONS_PROMPT.format(text=text)
+        lessons = _generate(prompt)
         
         # Node 3: Extract key points
-        keypoints_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_KEYPOINTS_PROMPT.format(text=text)
-            keypoints_prompts.append(apply_chat_template(prompt))
-        keypoints = llm.generate(keypoints_prompts, sampling_params)
-        keypoints = [output.outputs[0].text.strip() for output in keypoints]
+        prompt = EXTRACT_KEYPOINTS_PROMPT.format(text=text)
+        keypoints = _generate(prompt)
         
         # Node 4: Extract quotes
-        quotes_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_QUOTES_PROMPT.format(text=text)
-            quotes_prompts.append(apply_chat_template(prompt))
-        quotes = llm.generate(quotes_prompts, sampling_params)
-        quotes = [output.outputs[0].text.strip() for output in quotes]
+        prompt = EXTRACT_QUOTES_PROMPT.format(text=text)
+        quotes = _generate(prompt)
         
         # Node 5: Extract anecdotes
-        anecdotes_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_ANECDOTES_PROMPT.format(text=text)
-            anecdotes_prompts.append(apply_chat_template(prompt))
-        anecdotes = llm.generate(anecdotes_prompts, sampling_params)
-        anecdotes = [output.outputs[0].text.strip() for output in anecdotes]
+        prompt = EXTRACT_ANECDOTES_PROMPT.format(text=text)
+        anecdotes = _generate(prompt)
         
         # Node 6: Extract resources
-        resources_prompts = []
-        for text in batch_texts:
-            prompt = EXTRACT_RESOURCES_PROMPT.format(text=text)
-            resources_prompts.append(apply_chat_template(prompt))
-        resources = llm.generate(resources_prompts, sampling_params)
-        resources = [output.outputs[0].text.strip() for output in resources]
+        prompt = EXTRACT_RESOURCES_PROMPT.format(text=text)
+        resources = _generate(prompt)
         
-        # Aggregate results for each chapter in the batch
-        for j in range(len(batch_texts)):
-            aggregated = _aggregate_node_results(
-                summaries[j],
-                lessons[j],
-                keypoints[j],
-                quotes[j],
-                anecdotes[j],
-                resources[j]
-            )
-            all_results.append(aggregated)
+        # Aggregate results
+        aggregated = _aggregate_node_results(
+            summary,
+            lessons,
+            keypoints,
+            quotes,
+            anecdotes,
+            resources
+        )
+        all_results.append(aggregated)
     
     return all_results
 
 
-def _aggregate_node_results(summary, lessons, keypoints, quotes, anecdotes, resources):
-    """Aggregate results from all nodes into a structured markdown format.
+def _aggregate_node_results(
+    summary: str,
+    lessons: str,
+    keypoints: str,
+    quotes: str,
+    anecdotes: str,
+    resources: str
+) -> str:
+    """
+    Aggregate results from all nodes into a structured markdown format.
     
     Args:
-        summary (str): Summary with title (# header)
-        lessons (str): Lessons content
-        keypoints (str): Key points content
-        quotes (str): Quotes content
-        anecdotes (str): Anecdotes content
-        resources (str): Resources content
+        summary: Summary with title (# header)
+        lessons: Lessons content
+        keypoints: Key points content
+        quotes: Quotes content
+        anecdotes: Anecdotes content
+        resources: Resources content
         
     Returns:
-        str: Aggregated markdown content
+        Aggregated markdown content
     """
     # Start with the summary (which includes the title as # header)
     parts = [summary]
@@ -233,38 +198,37 @@ def _aggregate_node_results(summary, lessons, keypoints, quotes, anecdotes, reso
     
     return "\n".join(parts)
 
-def translate_text(text, target_lang):
-    """Translate a single text."""
-    prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
-
-    formatted_prompt = apply_chat_template(prompt)
-    outputs = llm.generate([formatted_prompt], sampling_params)
-    
-    response = outputs[0].outputs[0].text
-    return response.strip()
-
-def translate_text_batch(texts, target_lang):
-    """Translate multiple texts in batches to manage memory.
+def translate_text(text: str, target_lang: str) -> str:
+    """
+    Translate a single text.
     
     Args:
-        texts (list[str]): List of texts to translate
-        target_lang (str): Target language
+        text: Text to translate
+        target_lang: Target language
         
     Returns:
-        list[str]: List of translated texts
+        Translated text
+    """
+    prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
+    return _generate(prompt)
+
+
+def translate_text_batch(texts: List[str], target_lang: str) -> List[str]:
+    """
+    Translate multiple texts sequentially.
+    
+    Args:
+        texts: List of texts to translate
+        target_lang: Target language
+        
+    Returns:
+        List of translated texts
     """
     all_results = []
     
-    # Process in chunks to avoid OOM
-    for i in range(0, len(texts), AI_BATCH_SIZE):
-        batch_texts = texts[i:i+AI_BATCH_SIZE]
-        prompts = []
-        
-        for text in batch_texts:
-            prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
-            prompts.append(apply_chat_template(prompt))
-        
-        outputs = llm.generate(prompts, sampling_params)
-        all_results.extend([output.outputs[0].text.strip() for output in outputs])
+    for text in tqdm(texts, desc=f"Translating to {target_lang}", unit="text"):
+        prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
+        translation = _generate(prompt)
+        all_results.append(translation)
     
     return all_results

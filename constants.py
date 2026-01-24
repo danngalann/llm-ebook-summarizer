@@ -6,9 +6,6 @@ MIN_WORD_COUNT = 200
 # Default output directory for processed chapters
 OUTPUT_DIR = "output"
 
-AI_BATCH_SIZE = 50  # Number of chapters to process in a single batch
-
-# Enable CUDA Graphs for vLLM, consumes more GPU memory but speeds up inference
-ENABLE_CUDA_GRAPH = True
-
-GPU_MEMORY_UTILIZATION = 0.85  # Fraction of GPU memory to utilize for vLLM
+# Ollama configuration
+OLLAMA_MODEL = "qwen3:30b-a3b-instruct-2507-q4_K_M"  # 32B quantized model for high-quality summaries
+OLLAMA_BASE_URL = "http://localhost:11434"  # Default Ollama server URL
