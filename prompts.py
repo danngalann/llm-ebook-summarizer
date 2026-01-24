@@ -128,7 +128,7 @@ Format:
 - Pure Markdown only.
 - Present up to 3 anecdotes.
 - Each anecdote must have:
-  - A level 2 heading (##) with a short descriptive title.
+  - A level 3 heading (###) with a short descriptive title.
   - A concise narrative summary focused on what happened.
 """
 

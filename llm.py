@@ -181,20 +181,20 @@ def _aggregate_node_results(
     
     # Add each section with hardcoded headers
     if lessons.strip():
-        parts.append("\n# Lessons\n" + lessons)
+        parts.append("\n## Lessons\n" + lessons)
     
     if keypoints.strip():
-        parts.append("\n# Key Points\n" + keypoints)
+        parts.append("\n## Key Points\n" + keypoints)
     
     if quotes.strip():
-        parts.append("\n# Quotes\n" + quotes)
+        parts.append("\n## Quotes\n" + quotes)
     
     if anecdotes.strip():
-        parts.append("\n# Anecdotes\n" + anecdotes)
+        parts.append("\n## Anecdotes\n" + anecdotes)
     
     # Skip resources section if the special message is returned (case insensitive)
     if resources.strip() and resources.strip().lower() != "no resources mentioned.":
-        parts.append("\n# Resources\n" + resources)
+        parts.append("\n## Resources\n" + resources)
     
     return "\n".join(parts)
 
