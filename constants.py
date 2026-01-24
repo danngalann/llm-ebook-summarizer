@@ -10,3 +10,5 @@ AI_BATCH_SIZE = 50  # Number of chapters to process in a single batch
 
 # Enable CUDA Graphs for vLLM, consumes more GPU memory but speeds up inference
 ENABLE_CUDA_GRAPH = True
+
+GPU_MEMORY_UTILIZATION = 0.85  # Fraction of GPU memory to utilize for vLLM
