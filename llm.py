@@ -2,6 +2,7 @@ from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 from constants import AI_BATCH_SIZE, ENABLE_CUDA_GRAPH
+from prompts import EXTRACT_NOTES_PROMPT, TRANSLATE_TEXT_PROMPT
 
 # Model configuration
 MODEL_ID = "unsloth/Qwen3-8B-unsloth-bnb-4bit"
@@ -63,33 +64,6 @@ def apply_chat_template(prompt: str) -> str:
     )
     return text
 
-def extract_notes(text):
-    """Extract notes from a single chapter."""
-    prompt = f"""
-    Your task is to make notes from chapters of a book. You are given the text content of a chapter from a book, and you provide a short summary and notes from the chapter in Markdown.    
-    
-    CHAPTER TEXT:
-    {text}
-    END CHAPTER TEXT
-
-    The summary must contain the following structure:
-    - Title (extracted or inferred from text, always a # header)
-    - Summary: A short summary of the content
-    - Notes
-      - Lessons (stuff that the chapter teaches, explains, or exposes)
-      - Key points
-      - Interesting quotes
-    - Annecdotes or interesting comparisons
-
-    Your response is pure markdown, without additional explanations sorrounding the notes and summary.
-    """
-
-    formatted_prompt = apply_chat_template(prompt)
-    outputs = llm.generate([formatted_prompt], sampling_params)
-    
-    response = outputs[0].outputs[0].text
-    return response.strip()
-
 def extract_notes_batch(texts):
     """Extract notes from multiple chapters in batches to manage memory.
     
@@ -107,24 +81,7 @@ def extract_notes_batch(texts):
         prompts = []
         
         for text in batch_texts:
-            prompt = f"""
-    Your task is to make notes from chapters of a book. You are given the text content of a chapter from a book, and you provide a short summary and notes from the chapter in Markdown.    
-    
-    CHAPTER TEXT:
-    {text}
-    END CHAPTER TEXT
-
-    The summary must contain the following structure:
-    - Title (extracted or inferred from text, always a # header)
-    - Summary: A short summary of the content
-    - Notes
-      - Lessons (stuff that the chapter teaches, explains, or exposes)
-      - Key points
-      - Interesting quotes
-    - Annecdotes or interesting comparisons
-
-    Your response is pure markdown, without additional explanations sorrounding the notes and summary.
-    """
+            prompt = EXTRACT_NOTES_PROMPT.format(text=text)
             prompts.append(apply_chat_template(prompt))
         
         outputs = llm.generate(prompts, sampling_params)
@@ -134,12 +91,7 @@ def extract_notes_batch(texts):
 
 def translate_text(text, target_lang):
     """Translate a single text."""
-    prompt = f"""
-    Your task is to translate the following markdown text from its origional language to {target_lang}.
-    You must keep the headings (#, ##, etc), lists and other markdown items just as they are.
-
-    {text}
-    """
+    prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
 
     formatted_prompt = apply_chat_template(prompt)
     outputs = llm.generate([formatted_prompt], sampling_params)
@@ -165,12 +117,7 @@ def translate_text_batch(texts, target_lang):
         prompts = []
         
         for text in batch_texts:
-            prompt = f"""
-    Your task is to translate the following markdown text from its origional language to {target_lang}.
-    You must keep the headings (#, ##, etc), lists and other markdown items just as they are.
-
-    {text}
-    """
+            prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
             prompts.append(apply_chat_template(prompt))
         
         outputs = llm.generate(prompts, sampling_params)
