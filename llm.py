@@ -3,6 +3,7 @@ from transformers import AutoTokenizer
 
 from constants import AI_BATCH_SIZE, ENABLE_CUDA_GRAPH, GPU_MEMORY_UTILIZATION
 from prompts import (
+    CLASSIFY_CHAPTER_PROMPT,
     EXTRACT_SUMMARY_PROMPT,
     EXTRACT_LESSONS_PROMPT,
     EXTRACT_KEYPOINTS_PROMPT,
@@ -71,6 +72,40 @@ def apply_chat_template(prompt: str) -> str:
     )
     return text
 
+def classify_chapters_batch(texts):
+    """Classify chapters to determine if they are relevant for processing.
+    
+    This function runs the classification node on all chapters in batches.
+    Chapters are considered relevant if the LLM output includes 'RELEVANT' (case-insensitive).
+    
+    Args:
+        texts (list[str]): List of chapter texts
+        
+    Returns:
+        list[str]: List of chapter texts that are classified as relevant
+    """
+    relevant_texts = []
+    
+    # Process in chunks to avoid OOM
+    for i in range(0, len(texts), AI_BATCH_SIZE):
+        batch_texts = texts[i:i+AI_BATCH_SIZE]
+        
+        # Classify all chapters in the batch
+        classify_prompts = []
+        for text in batch_texts:
+            prompt = CLASSIFY_CHAPTER_PROMPT.format(text=text)
+            classify_prompts.append(apply_chat_template(prompt))
+        
+        classifications = llm.generate(classify_prompts, sampling_params)
+        classifications = [output.outputs[0].text.strip() for output in classifications]
+        
+        # Filter texts based on classification (case-insensitive, exact match)
+        for j, classification in enumerate(classifications):
+            if "relevant" == classification.lower():
+                relevant_texts.append(batch_texts[j])
+    
+    return relevant_texts
+
 def extract_notes_batch(texts):
     """Extract notes from multiple chapters using multi-node processing.
     
@@ -91,8 +126,6 @@ def extract_notes_batch(texts):
         list[str]: List of aggregated summaries for each chapter
     """
     all_results = []
-
-    texts = texts[:5] # For testing purposes, limit to first 5 chapters
     
     # Process in chunks to avoid OOM
     for i in range(0, len(texts), AI_BATCH_SIZE):

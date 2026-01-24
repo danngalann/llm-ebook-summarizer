@@ -2,7 +2,7 @@ import os
 import argparse
 from tqdm import tqdm
 
-from llm import extract_notes_batch
+from llm import classify_chapters_batch, extract_notes_batch
 from epub_extractor import extract_epub_content
 from pdf_extractor import extract_pdf_content
 from constants import MIN_WORD_COUNT, OUTPUT_DIR
@@ -65,22 +65,46 @@ def extract_chapters(file_path: str) -> None:
         texts = [item['text'] for item in chapter_data]
     else:
         texts = [chapter['text'] for chapter in chapter_data]
+
+    # Limit texts for testing purposes
+    texts = texts[:5]
     
-    # Process all sections in one batch (vLLM handles internal batching efficiently)
-    summaries = extract_notes_batch(texts)
+    # Classify chapters to filter out irrelevant ones
+    print(f"Classifying {len(texts)} chapters...")
+    relevant_texts = classify_chapters_batch(texts)
+    print(f"Found {len(relevant_texts)} relevant chapters out of {len(texts)} total")
+    
+    if not relevant_texts:
+        print("No relevant chapters found to process.")
+        return
+    
+    # Create mapping of relevant texts to original chapter data
+    relevant_indices = []
+    for i, text in enumerate(texts):
+        if text in relevant_texts:
+            relevant_indices.append(i)
+    
+    # Filter chapter_data to only relevant chapters
+    if file_ext == '.pdf':
+        relevant_chapter_data = [chapter_data[i] for i in relevant_indices]
+    else:
+        relevant_chapter_data = [chapter_data[i] for i in relevant_indices]
+    
+    # Process only relevant sections
+    summaries = extract_notes_batch(relevant_texts)
     
     # Save summaries
     print("Saving section summaries...")
     if file_ext == '.pdf':
-        for item, summary in tqdm(zip(chapter_data, summaries), total=len(chapter_data), desc="Saving sections"):
+        for item, summary in tqdm(zip(relevant_chapter_data, summaries), total=len(summaries), desc="Saving sections"):
             if summary:
                 save_single_chapter(item['node'].get_filename(), summary)
     else:
-        for chapter, summary in tqdm(zip(chapter_data, summaries), total=len(chapter_data), desc="Saving chapters"):
+        for chapter, summary in tqdm(zip(relevant_chapter_data, summaries), total=len(summaries), desc="Saving chapters"):
             if summary:
                 save_single_chapter(chapter['filename'], summary)
     
-    print(f"Saved {len(chapter_data)} section summaries.")
+    print(f"Saved {len(summaries)} section summaries (filtered from {len(chapter_data)} total).")
 
 def main():
     parser = argparse.ArgumentParser(description="Process an EPUB or PDF book and extract chapter notes.")
