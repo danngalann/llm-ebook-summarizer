@@ -65,9 +65,6 @@ def extract_chapters(file_path: str) -> None:
         texts = [item['text'] for item in chapter_data]
     else:
         texts = [chapter['text'] for chapter in chapter_data]
-
-    # Limit texts for testing purposes
-    texts = texts[:5]
     
     # Classify chapters to filter out irrelevant ones
     print(f"Classifying {len(texts)} chapters...")
