@@ -5,7 +5,9 @@ from tqdm import tqdm
 from llm import classify_chapters_batch, extract_notes_batch
 from epub_extractor import extract_epub_content
 from pdf_extractor import extract_pdf_content
-from constants import MIN_WORD_COUNT, OUTPUT_DIR
+
+MIN_WORD_COUNT = int(os.getenv("MIN_WORD_COUNT", "200"))
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
 def ensure_output_dir_exists(output_dir: str = OUTPUT_DIR) -> None:
     """
@@ -30,7 +32,7 @@ def save_single_chapter(chapter_filename: str, notes: str, output_dir: str = OUT
 
 def extract_chapters(file_path: str) -> None:
     """
-    Extracts chapters from the given EPUB or PDF file and processes them using Ollama.
+    Extracts chapters from the given EPUB or PDF file and processes them using the configured LLM.
     For PDFs with nested TOC, processes leaf nodes and merges summaries hierarchically.
 
     Args:

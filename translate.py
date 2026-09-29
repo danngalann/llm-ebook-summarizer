@@ -8,7 +8,7 @@ TRANSLATIONS_DIR = "translations"
 
 def translate_all_files(target_lang: str) -> None:
     """
-    Translates all markdown files in batch using vLLM.
+    Translates all markdown files using the configured LLM.
     
     Args:
         target_lang (str): Target language for translation.

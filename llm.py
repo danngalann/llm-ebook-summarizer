@@ -1,25 +1,16 @@
-"""
-LLM client for book summarization using Ollama.
+"""Book summarization with local Ollama or OpenRouter."""
 
-WHY OLLAMA INSTEAD OF vLLM:
-This project performs offline, batch summarization with low concurrency (1-2 active sequences).
-vLLM aggressively preallocates KV cache for high-throughput batching, which limits usable model size
-on a 24 GB GPU to ~7B-8B quantized models even with 4-bit quantization.
-
-Ollama uses conservative memory allocation optimized for single-sequence inference, allowing
-32B-class quantized models (e.g., qwen3:30b-a3b-instruct-2507-q4_K_M) to run on the same hardware. For this workload,
-Ollama provides significantly better output quality with comparable end-to-end runtime and
-much lower operational complexity.
-
-This design choice prioritizes summary quality over batching throughput, which is appropriate
-for offline batch processing on single-GPU hardware.
-"""
-
-import ollama
+from concurrent.futures import ThreadPoolExecutor
+import os
+from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
+
+from dotenv import load_dotenv
+import httpx
+import ollama
 from tqdm import tqdm
 
-from constants import OLLAMA_MODEL, OLLAMA_BASE_URL
 from prompts import (
     CLASSIFY_CHAPTER_PROMPT,
     EXTRACT_SUMMARY_PROMPT,
@@ -31,10 +22,42 @@ from prompts import (
     TRANSLATE_TEXT_PROMPT
 )
 
-# Initialize Ollama client
-client = ollama.Client(host=OLLAMA_BASE_URL)
+load_dotenv(Path(__file__).with_name(".env"))
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL")
+REMOTE_CONCURRENCY = int(os.getenv("REMOTE_CONCURRENCY", "6"))
 
-# Generation parameters
+parsed_url = urlparse(LLM_BASE_URL)
+if parsed_url.scheme not in ("http", "https") or not parsed_url.hostname:
+    raise ValueError("LLM_BASE_URL must be an HTTP(S) URL")
+
+IS_OPENROUTER = parsed_url.hostname == "openrouter.ai"
+if IS_OPENROUTER:
+    if parsed_url.scheme != "https":
+        raise ValueError("OpenRouter requires an HTTPS URL")
+    if not LLM_API_KEY:
+        raise ValueError("LLM_API_KEY is required for OpenRouter")
+    if REMOTE_CONCURRENCY < 1:
+        raise ValueError("REMOTE_CONCURRENCY must be positive")
+    base_url = LLM_BASE_URL.rstrip("/")
+    if parsed_url.path in ("", "/"):
+        base_url += "/api/v1"
+    elif parsed_url.path.rstrip("/") != "/api/v1":
+        raise ValueError("OpenRouter URL must end in /api/v1")
+    client = httpx.Client(
+        base_url=base_url + "/",
+        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+        timeout=120,
+        limits=httpx.Limits(max_connections=REMOTE_CONCURRENCY),
+    )
+else:
+    client = ollama.Client(host=LLM_BASE_URL)
+
+MODEL = LLM_MODEL or (None if IS_OPENROUTER else "qwen3:30b-a3b-instruct-2507-q4_K_M")
+CONCURRENCY = REMOTE_CONCURRENCY if IS_OPENROUTER else 1
+
+# Ollama only: OpenRouter models have their own context and output limits.
 GENERATION_OPTIONS = {
     "temperature": 0.7,
     "top_p": 0.8,
@@ -45,34 +68,39 @@ GENERATION_OPTIONS = {
 
 
 def _generate(prompt: str) -> str:
-    """
-    Generate a response from the Ollama model.
-    
-    Args:
-        prompt: The user prompt
-        
-    Returns:
-        The generated text response
-        
-    Raises:
-        Exception: If Ollama connection or generation fails
-    """
-    try:
+    """Generate a response from the configured model."""
+    if IS_OPENROUTER:
+        request = {
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": GENERATION_OPTIONS["temperature"],
+            "top_p": GENERATION_OPTIONS["top_p"],
+        }
+        if MODEL:
+            request["model"] = MODEL
+        response = client.post("chat/completions", json=request)
+        response.raise_for_status()
+        data = response.json()
+        choice = data["choices"][0]
+        if choice.get("finish_reason") == "length":
+            raise ValueError("OpenRouter response exceeded the model's output limit")
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("OpenRouter returned an empty text response")
+        return content.strip()
+    else:
         response = client.chat(
-            model=OLLAMA_MODEL,
+            model=MODEL,
             messages=[{"role": "user", "content": prompt}],
             options=GENERATION_OPTIONS,
         )
         return response["message"]["content"].strip()
-    except Exception as e:
-        raise Exception(f"Ollama generation failed: {e}")
 
 def classify_chapters_batch(texts: List[str]) -> List[str]:
     """
     Classify chapters to determine if they are relevant for processing.
     
-    Processes chapters sequentially (Ollama is optimized for single-sequence inference).
-    Chapters are considered relevant if the LLM output includes 'RELEVANT' (case-insensitive).
+    Uses sequential requests locally and concurrent requests on OpenRouter.
+    Chapters are considered relevant if the LLM output is 'RELEVANT' (case-insensitive).
     
     Args:
         texts: List of chapter texts
@@ -80,17 +108,17 @@ def classify_chapters_batch(texts: List[str]) -> List[str]:
     Returns:
         List of chapter texts that are classified as relevant
     """
-    relevant_texts = []
-    
-    for text in tqdm(texts, desc="Classifying chapters", unit="chapter"):
+    def classify(text: str) -> bool:
         prompt = CLASSIFY_CHAPTER_PROMPT.format(text=text)
         classification = _generate(prompt)
-        
-        # Filter texts based on classification (case-insensitive)
-        if "relevant" == classification.lower():
-            relevant_texts.append(text)
-    
-    return relevant_texts
+        return classification.lower() == "relevant"
+
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+        classifications = list(tqdm(
+            executor.map(classify, texts), total=len(texts),
+            desc="Classifying chapters", unit="chapter",
+        ))
+    return [text for text, relevant in zip(texts, classifications) if relevant]
 
 def extract_notes_batch(texts: List[str]) -> List[str]:
     """
@@ -112,46 +140,34 @@ def extract_notes_batch(texts: List[str]) -> List[str]:
     Returns:
         List of aggregated summaries for each chapter
     """
-    all_results = []
-    
-    # Process each chapter sequentially through all nodes
-    for text in tqdm(texts, desc="Processing chapters", unit="chapter"):
-        # Node 1: Extract summary (includes title)
-        prompt = EXTRACT_SUMMARY_PROMPT.format(text=text)
-        summary = _generate(prompt)
-        
-        # Node 2: Extract lessons
-        prompt = EXTRACT_LESSONS_PROMPT.format(text=text)
-        lessons = _generate(prompt)
-        
-        # Node 3: Extract key points
-        prompt = EXTRACT_KEYPOINTS_PROMPT.format(text=text)
-        keypoints = _generate(prompt)
-        
-        # Node 4: Extract quotes
-        prompt = EXTRACT_QUOTES_PROMPT.format(text=text)
-        quotes = _generate(prompt)
-        
-        # Node 5: Extract anecdotes
-        prompt = EXTRACT_ANECDOTES_PROMPT.format(text=text)
-        anecdotes = _generate(prompt)
-        
-        # Node 6: Extract resources
-        prompt = EXTRACT_RESOURCES_PROMPT.format(text=text)
-        resources = _generate(prompt)
-        
-        # Aggregate results
-        aggregated = _aggregate_node_results(
-            summary,
-            lessons,
-            keypoints,
-            quotes,
-            anecdotes,
-            resources
-        )
-        all_results.append(aggregated)
-    
-    return all_results
+    prompts = (
+        EXTRACT_SUMMARY_PROMPT,
+        EXTRACT_LESSONS_PROMPT,
+        EXTRACT_KEYPOINTS_PROMPT,
+        EXTRACT_QUOTES_PROMPT,
+        EXTRACT_ANECDOTES_PROMPT,
+        EXTRACT_RESOURCES_PROMPT,
+    )
+
+    if not IS_OPENROUTER:
+        return [
+            _aggregate_node_results(*(
+                _generate(template.format(text=text)) for template in prompts
+            ))
+            for text in tqdm(texts, desc="Processing chapters", unit="chapter")
+        ]
+
+    def generate_task(task: tuple[str, str]) -> str:
+        text, template = task
+        return _generate(template.format(text=text))
+
+    tasks = ((text, template) for text in texts for template in prompts)
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+        responses = iter(executor.map(generate_task, tasks))
+        return [
+            _aggregate_node_results(*(next(responses) for _ in prompts))
+            for _ in tqdm(texts, desc="Processing chapters", unit="chapter")
+        ]
 
 
 def _aggregate_node_results(
@@ -215,7 +231,7 @@ def translate_text(text: str, target_lang: str) -> str:
 
 def translate_text_batch(texts: List[str], target_lang: str) -> List[str]:
     """
-    Translate multiple texts sequentially.
+    Translate multiple texts; use concurrent requests on OpenRouter.
     
     Args:
         texts: List of texts to translate
@@ -224,11 +240,12 @@ def translate_text_batch(texts: List[str], target_lang: str) -> List[str]:
     Returns:
         List of translated texts
     """
-    all_results = []
-    
-    for text in tqdm(texts, desc=f"Translating to {target_lang}", unit="text"):
+    def translate(text: str) -> str:
         prompt = TRANSLATE_TEXT_PROMPT.format(text=text, target_lang=target_lang)
-        translation = _generate(prompt)
-        all_results.append(translation)
-    
-    return all_results
+        return _generate(prompt)
+
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+        return list(tqdm(
+            executor.map(translate, texts), total=len(texts),
+            desc=f"Translating to {target_lang}", unit="text",
+        ))

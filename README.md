@@ -11,10 +11,10 @@ A tool for extracting and summarizing chapters from ebooks using LLMs. Perfect f
 - **Context preservation** — Includes parent section introductions when summarizing nested content
 
 ### AI-Powered Processing
-- Uses **Ollama** with large quantized models (32B) for high-quality summaries
+- Uses **Ollama** locally or **OpenRouter** with a hosted model
 - Generates structured markdown notes for each chapter
 - Extracts key insights: summaries, lessons, quotes, and anecdotes
-- Sequential processing optimized for single-GPU inference
+- Sequential local processing; configurable concurrent remote requests
 - Maintains 200-word minimum filter for quality content
 
 ### Translation
@@ -31,7 +31,7 @@ A tool for extracting and summarizing chapters from ebooks using LLMs. Perfect f
 
 ### Ollama Setup
 
-This project uses **Ollama** for LLM inference. Ollama must be installed and running before using the summarizer.
+By default this project uses **Ollama** for LLM inference. Ollama must be installed and running for local use. Alternatively, configure OpenRouter below; Ollama is not needed in that case.
 
 1. **Install Ollama:**
    ```bash
@@ -179,17 +179,26 @@ uv sync
 
 ## Configuration
 
-You can customize the Ollama configuration in [constants.py](constants.py):
-
-```python
-OLLAMA_MODEL = "qwen3:30b-a3b-instruct-2507-q4_K_M"  # Model to use
-OLLAMA_BASE_URL = "http://localhost:11434"  # Ollama server URL
-```
+Copy [`.env.example`](.env.example) to `.env` and edit the copy. The example defaults to local Ollama; `.env` is ignored by Git and loaded automatically by both `main.py` and `translate.py`. Environment variables set in the shell take precedence over `.env`.
 
 **Changing the model:**
 1. Pull a different model: `ollama pull <model-name>`
-2. Update `OLLAMA_MODEL` in [constants.py](constants.py)
+2. Set `LLM_MODEL=<model-name>` in `.env` (or leave it blank for the local default)
 3. Run the summarizer
+
+**Using OpenRouter instead:**
+
+In your private `.env`, set:
+
+```dotenv
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=your-openrouter-api-key
+LLM_MODEL=
+```
+
+With only the URL and key changed, OpenRouter uses the account's default model. To select a specific model, set `LLM_MODEL=provider/model-name` (as in the reMarkable project). Never put a real API key in `.env.example` or other tracked files. The URL must use HTTPS.
+
+Ollama retains its 32k-token configured context window and runs one request at a time. OpenRouter requests do **not** send Ollama's context/output settings: the selected model's own context and output limits apply. OpenRouter rejects oversized prompts, and the summarizer rejects truncated completions. For large chapters, choose a model with a sufficiently large context window. Remote requests use up to six concurrent connections by default; set `REMOTE_CONCURRENCY` to a positive integer in `.env` to tune this for your rate limits. Parallel requests can increase API usage and cost.
 
 ## Notes
 
